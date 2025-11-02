@@ -229,34 +229,23 @@ jobs:
             -d "{\"content\":\"✅ Aegis pipeline succeeded in namespace *${K8S_NAMESPACE}*!\"}" \
             "$DISCORD_WEBHOOK"
 
-  # ⚠️ Notify on Failure
+    # ⚠️ Notify on Failure
   notify_failure:
     name: ⚠️ Notify on Failure
     runs-on: self-hosted
-    needs:
-      - sonarqube_quality_gate
-      - pytest
-      - build_backend
-      - build_frontend
-      - trivy_backend
-      - trivy_frontend
-      - push_backend
-      - push_frontend
-      - deploy
     if: failure()
     steps:
       - run: |
           curl -X POST -H "Content-Type: application/json" \
-            -d "{
-              \"content\": \"❌ **Aegis Pipeline Failed!**
-              🔹 **Workflow:** ${{ github.workflow }}
-              🔹 **Job:** ${{ github.job }}
-              🔹 **Repo:** ${{ github.repository }}
-              🔹 **Branch:** ${{ github.ref_name }}
-              🔹 **Commit:** [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-              🔹 **Run Logs:** [View Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-              \"
-            }" \
+            -d '{
+              "content": "❌ **Aegis Pipeline Failed!**\n
+              🔹 **Workflow:** ${{ github.workflow }}\n
+              🔹 **Job:** ${{ github.job }}\n
+              🔹 **Repo:** ${{ github.repository }}\n
+              🔹 **Branch:** ${{ github.ref_name }}\n
+              🔹 **Commit:** [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})\n
+              🔹 **Run Logs:** [View Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            }' \
             $DISCORD_WEBHOOK
 
   # 🔀 Auto Merge to Main

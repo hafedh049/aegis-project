@@ -27,7 +27,7 @@ COPY . .
 # Install dependencies
 # -----------------------------
 RUN apt update && \
-    apt install -y curl dnsutils ping wget && \
+    apt install -y curl wget dnsutils iputils-ping && \
     pip install --no-cache-dir -r requirements.txt && \
     rm -rf /var/lib/apt/lists/*
 # -----------------------------
