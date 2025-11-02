@@ -17,9 +17,9 @@ OLLAMA_URL = os.getenv("OLLAMA_URL")
 GRAFANA_IP = os.getenv("GRAFANA_IP")
 
 
-def reset_and_create_admin_token(ip):
+def reset_and_create_admin_token():
     """Delete ALL Grafana tokens then create a brand-new admin one"""
-    url_keys = f"http://{ip}{KEYS_ENDPOINT}"
+    url_keys = f"http://{GRAFANA_IP}{KEYS_ENDPOINT}"
     resp = requests.get(url_keys, auth=(GRAFANA_USER, GRAFANA_PASSWORD))
     resp.raise_for_status()
     keys = resp.json()
@@ -29,7 +29,7 @@ def reset_and_create_admin_token(ip):
         del_url = f"{url_keys}/{key_id}"
         requests.delete(del_url, auth=(GRAFANA_USER, GRAFANA_PASSWORD))
 
-    payload = {"name": GRAFANA_TOKEN_NAME, "role": "Admin", "secondsToLive": 00}
+    payload = {"name": GRAFANA_TOKEN_NAME, "role": "Admin", "secondsToLive": 0}
     headers = {"Content-Type": "application/json"}
 
     resp_create = requests.post(
@@ -45,13 +45,9 @@ def reset_and_create_admin_token(ip):
 
 @app.route("/alerts", methods=["GET"])
 def fetch_alerts():
-    ip = os.getenv("GRAFANA_IP")
-    if not ip:
-        return jsonify({"error": "Arsenal VM not found"}), 404
-
     try:
-        token = reset_and_create_admin_token(ip)
-        url = f"http://{ip}{ALERTS_ENDPOINT}"
+        token = reset_and_create_admin_token()
+        url = f"http://{GRAFANA_IP}{ALERTS_ENDPOINT}"
 
         headers = {
             "Authorization": f"Bearer {token}",
