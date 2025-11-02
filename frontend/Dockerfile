@@ -12,8 +12,13 @@ RUN npm install --legacy-peer-deps && apk add --no-cache bind-tools curl
 
 # ---------- Build Stage ----------
 FROM deps AS build
+
+# Set the backend URL here so Next.js picks it up at build
+ENV NEXT_PUBLIC_BACKEND_URL="http://192.168.74.144:31888"
+
 # Copy source
 COPY . .
+
 # Build Next.js app
 RUN npm run build
 
