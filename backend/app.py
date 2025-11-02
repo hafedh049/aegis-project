@@ -135,7 +135,7 @@ Rules:
 
     except requests.exceptions.ConnectionError:
         return (
-            f"# ❌ Ollama Unreachable\n\n"
+            f"# ❌ Ollama is Unreachable\n\n"
             f"Failed to connect to: `{OLLAMA_URL}`\n\n"
             "Ensure Ollama is running.",
             500,
