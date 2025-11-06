@@ -4,11 +4,20 @@ import AlertItem from "@/components/alert-item"
 
 interface Alert {
   id: string
-  title: string
-  severity: "critical" | "high" | "medium" | "low"
   timestamp: string
-  description: string
+  alert_name: string
+  alert_description: string
+  source_ip: string
+  should_block: boolean
+  block_reason: string
+  is_attack: boolean
+  confidence: number
+  attack_type: string
+  severity: 'critical' | 'high' | 'medium' | 'low'
+  recommendation: string
+  logs: string[] // assuming logs are text lines; use `any` if they can vary
 }
+
 
 interface AlertsListProps {
   alerts: Alert[]

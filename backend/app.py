@@ -1,3 +1,4 @@
+from datetime import datetime
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import requests
@@ -32,31 +33,20 @@ def fetch_alerts():
         db = client[MONGO_DB_NAME]
 
         # Fetch alerts from MongoDB
-        alerts = list(db.alerts.find({}, {"_id": 0}).sort("timestamp", -1).limit(100))
+        alerts = list(db.alerts.find({}, {"_id": 0}).limit(100))
+
+        alerts.sort(
+            key=lambda x: (
+                datetime.fromisoformat(x["timestamp"])
+                if "timestamp" in x
+                else datetime.min
+            ),
+            reverse=True,
+        )
 
         client.close()
 
         return jsonify(alerts)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/alerts", methods=["POST"])
-def store_alert():
-    try:
-        alert_data = request.json
-
-        client = get_mongo_client()
-        db = client[MONGO_DB_NAME]
-
-        # Insert alert into MongoDB
-        result = db.alerts.insert_one(alert_data)
-
-        client.close()
-
-        return jsonify(
-            {"message": "Alert stored successfully", "id": str(result.inserted_id)}
-        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -89,7 +79,7 @@ def analyze_alert_chat():
 
         # --- Build system context ---
         alert_context = f"""<ALERT_CONTEXT>
-{json.dumps(alert, indent=2)}
+{json.dumps(alert)}
 </ALERT_CONTEXT>"""
 
         system_message = f"""You are a senior cybersecurity analyst. Use the alert context below to answer the user's question professionally in Markdown.

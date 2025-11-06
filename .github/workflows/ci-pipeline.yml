@@ -211,17 +211,9 @@ jobs:
             echo "✅ Namespace $K8S_NAMESPACE already exists."
           fi
 
-      - name: 🚀 Deploy Backend
+      - name: 🚀 Deploy Manifests
         run: |
-          kubectl apply -n "$K8S_NAMESPACE" -f /root/manifests/aegis-backend.yaml
-          kubectl scale -n "$K8S_NAMESPACE" deployment aegis-backend --replicas=${DEPLOY_REPLICAS}
-          echo "⏳ Waiting for backend pods to be ready..."
-
-      - name: 🎨 Deploy Frontend
-        run: |
-          kubectl apply -n "$K8S_NAMESPACE" -f /root/manifests/aegis-frontend.yaml
-          kubectl scale -n "$K8S_NAMESPACE" deployment aegis-frontend --replicas=${DEPLOY_REPLICAS}
-          echo "⏳ Waiting for frontend pods to be ready..."
+          kubectl apply -n "$K8S_NAMESPACE" -f /root/manifests/
 
       - name: ✅ Notify Success
         run: |
