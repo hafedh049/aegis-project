@@ -22,7 +22,7 @@ MONGO_DB_NAME = os.getenv("MONGO_DB_NAME")
 
 def get_mongo_client():
     """Create and return MongoDB client"""
-    connection_string = f"mongodb://{MONGO_USERNAME}:{MONGO_PASSWORD}@{MONGO_HOST}:{MONGO_PORT}/{MONGO_DB_NAME}?authSource=admin"
+    connection_string = f"{MONGO_HOST}://{MONGO_USERNAME}:{MONGO_PASSWORD}@{MONGO_HOST}:{MONGO_PORT}/{MONGO_DB_NAME}?authSource=admin"
     return MongoClient(connection_string)
 
 
