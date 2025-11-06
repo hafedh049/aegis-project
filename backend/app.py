@@ -3,65 +3,60 @@ from flask_cors import CORS
 import requests
 import json
 import os
-import re
+from pymongo import MongoClient
 
 app = Flask(__name__)
+
 CORS(app)
 
-GRAFANA_TOKEN_NAME = "grafana_alerts_fetch"
-ALERTS_ENDPOINT = "/api/alertmanager/grafana/api/v2/alerts"
-KEYS_ENDPOINT = "/api/auth/keys"
-GRAFANA_USER = os.getenv("GRAFANA_USER")
-GRAFANA_PASSWORD = os.getenv("GRAFANA_PASSWORD")
 OLLAMA_URL = os.getenv("OLLAMA_URL")
-GRAFANA_IP = os.getenv("GRAFANA_IP")
+
+# MongoDB configuration
+MONGO_HOST = os.getenv("MONGO_HOST")
+MONGO_PORT = os.getenv("MONGO_PORT")
+MONGO_USERNAME = os.getenv("MONGO_USERNAME")
+MONGO_PASSWORD = os.getenv("MONGO_PASSWORD")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME")
 
 
-def reset_and_create_admin_token():
-    """Delete ALL Grafana tokens then create a brand-new admin one"""
-    url_keys = f"http://{GRAFANA_IP}{KEYS_ENDPOINT}"
-    resp = requests.get(url_keys, auth=(GRAFANA_USER, GRAFANA_PASSWORD))
-    resp.raise_for_status()
-    keys = resp.json()
-
-    for key in keys:
-        key_id = key.get("id")
-        del_url = f"{url_keys}/{key_id}"
-        requests.delete(del_url, auth=(GRAFANA_USER, GRAFANA_PASSWORD))
-
-    payload = {"name": GRAFANA_TOKEN_NAME, "role": "Admin", "secondsToLive": 0}
-    headers = {"Content-Type": "application/json"}
-
-    resp_create = requests.post(
-        url_keys,
-        auth=(GRAFANA_USER, GRAFANA_PASSWORD),
-        headers=headers,
-        json=payload,
-    )
-    resp_create.raise_for_status()
-    token_json = resp_create.json()
-    return token_json.get("key")
+def get_mongo_client():
+    """Create and return MongoDB client"""
+    connection_string = f"mongodb://{MONGO_USERNAME}:{MONGO_PASSWORD}@{MONGO_HOST}:{MONGO_PORT}/{MONGO_DB_NAME}?authSource=admin"
+    return MongoClient(connection_string)
 
 
 @app.route("/alerts", methods=["GET"])
 def fetch_alerts():
     try:
-        token = reset_and_create_admin_token()
-        url = f"http://{GRAFANA_IP}{ALERTS_ENDPOINT}"
+        client = get_mongo_client()
+        db = client[MONGO_DB_NAME]
 
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
+        # Fetch alerts from MongoDB
+        alerts = list(db.alerts.find({}, {"_id": 0}).sort("timestamp", -1).limit(100))
 
-        resp = requests.get(url, headers=headers, timeout=5)
-        resp.raise_for_status()
-
-        alerts = resp.json()
-        if not isinstance(alerts, list):
-            alerts = [alerts]
+        client.close()
 
         return jsonify(alerts)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/alerts", methods=["POST"])
+def store_alert():
+    try:
+        alert_data = request.json
+
+        client = get_mongo_client()
+        db = client[MONGO_DB_NAME]
+
+        # Insert alert into MongoDB
+        result = db.alerts.insert_one(alert_data)
+
+        client.close()
+
+        return jsonify(
+            {"message": "Alert stored successfully", "id": str(result.inserted_id)}
+        )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
