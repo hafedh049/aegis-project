@@ -1,0 +1,276 @@
+name: Aegis CI/CD Pipeline ⚡⚡
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches: [temp-branch]
+  workflow_dispatch:
+
+# 🌍 Global environment variables (visible to all jobs)
+env:
+  BACKEND_DIR: backend
+  FRONTEND_DIR: frontend
+  DEPLOY_REPLICAS: 1
+  SONAR_HOST: http://localhost:9000
+  SONAR_PROJECT_KEY: Aegis
+  K8S_NAMESPACE: aegis
+  SONAR_TOKEN_FILE: sonar_token.txt
+  DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+  GTH_TOKEN: ${{ secrets.GTH_TOKEN }}
+
+jobs:
+  # ===================================
+  # 🧠 SonarQube Smart Scan (3 jobs)
+  # ===================================
+  sonarqube_setup:
+    name: ⚙️ Setup SonarQube Project & Token
+    runs-on: self-hosted
+    outputs:
+      SONAR_HOST: ${{ env.SONAR_HOST }}
+      SONAR_PROJECT_KEY: ${{ env.SONAR_PROJECT_KEY }}
+      SONAR_TOKEN_FILE: ${{ env.SONAR_TOKEN_FILE }}
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Project & Token
+        id: setup
+        run: |
+          set -e
+          URL="${SONAR_HOST}"
+          PROJECT="${SONAR_PROJECT_KEY}"
+          TOKEN_FILE="${{ github.workspace }}/${SONAR_TOKEN_FILE}"
+
+          [ -f "$TOKEN_FILE" ] && rm -f "$TOKEN_FILE"
+
+          echo "🔍 Checking if project '$PROJECT' exists..."
+          EXISTS=$(curl -s -u admin:admin "$URL/api/projects/search?projects=$PROJECT" | jq -r '.components | length')
+
+          if [ "$EXISTS" -gt 0 ]; then
+            echo "⚠️ Project '$PROJECT' already exists, deleting..."
+            curl -s -u admin:admin -X POST "$URL/api/projects/delete?project=$PROJECT" >/dev/null
+          fi
+
+          echo "🆕 Creating project '$PROJECT'..."
+          CREATE_RESP=$(curl -s -u admin:admin -X POST "$URL/api/projects/create" \
+            -d "name=$PROJECT" -d "project=$PROJECT")
+
+          if echo "$CREATE_RESP" | grep -q "already exists"; then
+            echo "⚠️ Project '$PROJECT' already exists (case-insensitive), skipping creation."
+          elif echo "$CREATE_RESP" | grep -q "errors"; then
+            echo "❌ Failed to create project: $CREATE_RESP"
+            exit 1
+          else
+            echo "✅ Project created successfully."
+          fi
+
+          echo "🔑 Generating new token..."
+          TOKEN=$(curl -s -u admin:admin -X POST "$URL/api/user_tokens/generate" \
+            -d "name=${PROJECT}-ci-$(date +%s)" | jq -r '.token // empty')
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "❌ Failed to generate a valid token for '$PROJECT'"
+            exit 1
+          fi
+
+          echo "$TOKEN" > "$TOKEN_FILE"
+          chmod 600 "$TOKEN_FILE"
+          echo "✅ Token saved at: $TOKEN_FILE"
+          ls -l "$TOKEN_FILE"
+
+      - name: 📦 Upload Sonar Token
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonar-token
+          path: ${{ github.workspace }}/${{ env.SONAR_TOKEN_FILE }}
+
+  sonarqube_scan:
+    name: 🕵️ Run SonarScanner
+    runs-on: self-hosted
+    needs: [sonarqube_setup]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sonar-token
+      - name: 🕵️ Run SonarScanner
+        run: |
+          set -e
+          TOKEN_PATH="${{ github.workspace }}/${SONAR_TOKEN_FILE}"
+          cat $TOKEN_PATH
+          docker run --rm --network=host \
+            -v "${{ github.workspace }}":/usr/src \
+            -v "${{ github.workspace }}/${SONAR_TOKEN_FILE}":/token:ro \
+            sonarsource/sonar-scanner-cli:latest \
+            -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+            -Dsonar.sources=. \
+            -Dsonar.host.url=${SONAR_HOST} \
+            -Dsonar.token="$(cat $TOKEN_PATH)"
+
+  sonarqube_quality_gate:
+    name: 🚧 Enforce Quality Gate
+    runs-on: self-hosted
+    needs: [sonarqube_setup, sonarqube_scan]
+    env:
+      SONAR_HOST: ${{ needs.sonarqube_setup.outputs.SONAR_HOST }}
+      SONAR_PROJECT_KEY: ${{ needs.sonarqube_setup.outputs.SONAR_PROJECT_KEY }}
+    steps:
+      - name: 🚧 Enforce Quality Gate
+        run: |
+          CE_TASK_URL="${SONAR_HOST}/api/ce/component?component=${SONAR_PROJECT_KEY}"
+          TASK_ID=$(curl -s -u admin:admin "$CE_TASK_URL" | jq -r '.queue[0].id // .current.id')
+          STATUS="PENDING"
+          for i in {1..20}; do
+            CE_STATUS=$(curl -s -u admin:admin "${SONAR_HOST}/api/ce/task?id=$TASK_ID" | jq -r '.task.status')
+            [ "$CE_STATUS" = "SUCCESS" ] && {
+              STATUS=$(curl -s -u admin:admin "${SONAR_HOST}/api/qualitygates/project_status?projectKey=${SONAR_PROJECT_KEY}" | jq -r '.projectStatus.status')
+              break
+            }
+            sleep 5
+          done
+          if [ "$STATUS" != "OK" ]; then exit 1; fi
+
+  # 🧪 Backend Unit Tests
+  pytest:
+    name: 🧪 Backend Unit Tests
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          cd ${BACKEND_DIR}
+          pytest tests/ --junitxml=results.xml -v --disable-warnings
+
+  # 🏗️ Build Docker Images
+  build_backend:
+    name: 🧱 Build Backend Docker Image
+    runs-on: self-hosted
+    needs: [pytest, sonarqube_quality_gate]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t aegis-backend:latest ${BACKEND_DIR}
+
+  build_frontend:
+    name: 🧱 Build Frontend Docker Image
+    runs-on: self-hosted
+    needs: [pytest, sonarqube_quality_gate]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t aegis-frontend:latest ${FRONTEND_DIR}
+
+  # 🛡️ Trivy Security Scan
+  trivy_backend:
+    name: 🔍 Trivy Scan Backend
+    runs-on: self-hosted
+    needs: [build_backend]
+    steps:
+      - run: trivy image --exit-code 0 aegis-backend:latest
+
+  trivy_frontend:
+    name: 🔍 Trivy Scan Frontend
+    runs-on: self-hosted
+    needs: [build_frontend]
+    steps:
+      - run: trivy image --exit-code 0 aegis-frontend:latest
+
+  # 🚀 Push Docker Images
+  push_backend:
+    name: 🚀 Push Backend Image
+    runs-on: self-hosted
+    needs: [trivy_backend]
+    steps:
+      - run: echo $GTH_TOKEN | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - run: |
+          docker tag aegis-backend:latest ghcr.io/${{ github.repository_owner }}/aegis-backend:latest
+          docker push ghcr.io/${{ github.repository_owner }}/aegis-backend:latest
+
+  push_frontend:
+    name: 🚀 Push Frontend Image
+    runs-on: self-hosted
+    needs: [trivy_frontend]
+    steps:
+      - run: echo $GTH_TOKEN | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - run: |
+          docker tag aegis-frontend:latest ghcr.io/${{ github.repository_owner }}/aegis-frontend:latest
+          docker push ghcr.io/${{ github.repository_owner }}/aegis-frontend:latest
+
+  # ☸️ Deploy to Kubernetes
+  deploy:
+    name: ☸️ Deploy to Kubernetes
+    runs-on: self-hosted
+    needs: [push_backend, push_frontend]
+
+    steps:
+      - name: 🧱 Ensure namespace exists
+        run: |
+          if ! kubectl get namespace "$K8S_NAMESPACE" >/dev/null 2>&1; then
+            echo "🆕 Creating namespace $K8S_NAMESPACE..."
+            kubectl create namespace "$K8S_NAMESPACE"
+          else
+            echo "✅ Namespace $K8S_NAMESPACE already exists."
+          fi
+
+      - name: 🚀 Deploy Manifests
+        run: |
+          kubectl apply -n "$K8S_NAMESPACE" -f /root/manifests/
+
+      - name: ✅ Notify Success
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+            -d "{\"content\":\"✅ Aegis pipeline succeeded in namespace *${K8S_NAMESPACE}*!\"}" \
+            "$DISCORD_WEBHOOK"
+
+    # ⚠️ Notify on Failure
+  notify_failure:
+    name: ⚠️ Notify on Failure
+    runs-on: self-hosted
+    if: failure()
+    steps:
+      - run: |
+          curl -X POST -H "Content-Type: application/json" \
+            -d '{
+              "content": "❌ **Aegis Pipeline Failed!**\n
+              🔹 **Workflow:** ${{ github.workflow }}\n
+              🔹 **Job:** ${{ github.job }}\n
+              🔹 **Repo:** ${{ github.repository }}\n
+              🔹 **Branch:** ${{ github.ref_name }}\n
+              🔹 **Commit:** [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})\n
+              🔹 **Run Logs:** [View Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            }' \
+            $DISCORD_WEBHOOK
+
+  # 🔀 Auto Merge to Main
+  merge-to-main:
+    name: 🔀 Merge temporary → main
+    runs-on: self-hosted
+    needs: deploy
+    if: success()
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout temp-branch
+          git branch -M main
+          git push origin main --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cleanup-branch:
+    name: 🧹 Delete temporary branch
+    runs-on: self-hosted
+    needs: merge-to-main
+    if: success()
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: 🧭 Switch to main
+        run: git checkout main
+
+      - name: 🧹 Delete temp branch on remote
+        run: git push origin --delete temp-branch || echo "Branch already deleted or not found"
